@@ -22,16 +22,33 @@ class LinkedInCrawler:
         """Main method to scrape a LinkedIn profile"""
         print(f"\nScraping profile: {url}")
         self.driver.get(url)
-        human_delay(3, 5)
+        
+        # Wait for page to load - check if main content exists
+        try:
+            print("Waiting for page to load...")
+            self.wait.until(
+                EC.presence_of_element_located((By.TAG_NAME, "main"))
+            )
+            human_delay(3, 4)
+        except TimeoutException:
+            print("⚠ Page load timeout! Content may not be available.")
+            human_delay(5, 6)  # Wait longer
         
         # Scroll to load all sections
         scroll_page_to_load(self.driver)
+        
+        # Debug: print page info
+        print(f"DEBUG - Current URL: {self.driver.current_url}")
+        print(f"DEBUG - Page title: {self.driver.title}")
         
         data = {}
         
         print("\n" + "="*60)
         print("EXTRACTING PROFILE DATA")
         print("="*60)
+        
+        # Add profile URL first
+        data['profile_url'] = url
         
         print("\n[1/6] Extracting name...")
         data['name'] = self.extract_name()
@@ -57,9 +74,21 @@ class LinkedInCrawler:
         data['projects'] = self.extract_projects()
         print(f"→ Found {len(data['projects'])} projects")
         
-        print("\n[7/7] Extracting languages...")
+        print("\n[7/8] Extracting honors & awards...")
+        data['honors'] = self.extract_honors()
+        print(f"→ Found {len(data['honors'])} honors & awards")
+        
+        print("\n[8/10] Extracting languages...")
         data['languages'] = self.extract_languages()
         print(f"→ Found {len(data['languages'])} languages")
+        
+        print("\n[9/10] Extracting licenses & certifications...")
+        data['licenses'] = self.extract_licenses()
+        print(f"→ Found {len(data['licenses'])} licenses & certifications")
+        
+        print("\n[10/10] Extracting courses...")
+        data['courses'] = self.extract_courses()
+        print(f"→ Found {len(data['courses'])} courses")
         
         print("\n" + "="*60)
         print("PROFILE EXTRACTION COMPLETE!")
@@ -78,9 +107,15 @@ class LinkedInCrawler:
         for by, selector in selectors:
             try:
                 element = self.driver.find_element(by, selector)
-                return element.text.strip()
+                name = element.text.strip()
+                if name:
+                    return name
             except NoSuchElementException:
                 continue
+        
+        # Debug: print page source if name not found
+        print("⚠ Name not found! Current URL:", self.driver.current_url)
+        print("⚠ Page title:", self.driver.title)
         return "N/A"
     
     def extract_about(self):
@@ -433,6 +468,11 @@ class LinkedInCrawler:
                         for i, line in enumerate(lines[:6]):
                             print(f"    {i}: {line[:80]}")
                         
+                        # Skip if it's "Activities and societies" or "...see more"
+                        if lines[0].startswith('Activities and societies') or lines[0] == '…see more':
+                            print(f"  → SKIP: Activities/see more line")
+                            continue
+                        
                         # LinkedIn structure after deduplication varies:
                         # Sometimes: School, School (dup), Degree, Year
                         # Sometimes: School, Degree, Year
@@ -497,6 +537,11 @@ class LinkedInCrawler:
                         print(f"  Education lines ({len(lines)}):")
                         for i, line in enumerate(lines[:6]):
                             print(f"    [{i}] {line[:80]}")
+                        
+                        # Skip if it's "Activities and societies" or "...see more"
+                        if lines[0].startswith('Activities and societies') or lines[0] == '…see more':
+                            print(f"  → SKIP: Activities/see more line")
+                            continue
                         
                         if len(lines) >= 2:
                             school = lines[0]
@@ -601,11 +646,15 @@ class LinkedInCrawler:
                             if first_word.isdigit() and ('experience' in skill_name.lower() or 'endorsement' in skill_name.lower()):
                                 is_count_pattern = True
                         
+                        # Skip if it's a job title (contains " at ")
+                        is_job_title = ' at ' in skill_name and len(skill_name) > 30
+                        
                         should_skip = (
                             any(pattern in skill_name for pattern in skip_if_contains) or
                             any(skill_name.startswith(pattern) for pattern in skip_if_starts_with) or
                             len(skill_name) > 100 or
-                            is_count_pattern
+                            is_count_pattern or
+                            is_job_title
                         )
                         
                         if should_skip:
@@ -907,6 +956,149 @@ class LinkedInCrawler:
         
         return projects
     
+    def extract_honors(self):
+        """Extract honors & awards section with show all flow"""
+        honors = []
+        try:
+            print("Looking for honors & awards section...")
+            
+            honors_section = None
+            selectors = [
+                "//section[contains(@id, 'honors')]",
+                "//section[contains(@id, 'accomplishments')]",
+                "//section[.//div[@id='honors']]",
+                "//section[.//div[@id='accomplishments']]",
+                "//section[.//h2[contains(text(), 'Honors')]]",
+                "//section[.//h2[contains(text(), 'awards')]]",
+                "//section[.//span[contains(text(), 'Honors & awards')]]",
+            ]
+            
+            for selector in selectors:
+                try:
+                    honors_section = self.wait.until(
+                        EC.presence_of_element_located((By.XPATH, selector))
+                    )
+                    print("✓ Found section")
+                    break
+                except TimeoutException:
+                    continue
+            
+            if not honors_section:
+                print("⚠ Honors & awards section not found")
+                return honors
+            
+            # Click "Show all"
+            clicked = click_show_all(self.driver, honors_section)
+            
+            if clicked:
+                items = extract_items_from_detail_page(self.driver)
+                
+                for item in items:
+                    try:
+                        text = item.text.strip()
+                        if not text or len(text) < 10:
+                            continue
+                        
+                        # Remove consecutive duplicates
+                        all_lines = [l.strip() for l in text.split('\n') if l.strip()]
+                        lines = []
+                        prev = None
+                        for line in all_lines:
+                            if line != prev:
+                                lines.append(line)
+                                prev = line
+                        
+                        print(f"  Honor item lines: {len(lines)}")
+                        for i, line in enumerate(lines[:4]):
+                            print(f"    [{i}] {line[:80]}")
+                        
+                        # Structure:
+                        # 0: Title
+                        # 1: "Issued by X · Date" (need to split by ·)
+                        
+                        if len(lines) >= 2:
+                            title = lines[0]
+                            issued_line = lines[1]
+                            
+                            # Split "Issued by X · Date" by ·
+                            issued_by = ""
+                            year = ""
+                            
+                            if '·' in issued_line:
+                                parts = issued_line.split('·')
+                                issued_by = parts[0].strip()
+                                year = parts[1].strip() if len(parts) > 1 else ""
+                                
+                                # Remove "Issued by " prefix
+                                if issued_by.startswith('Issued by '):
+                                    issued_by = issued_by.replace('Issued by ', '', 1)
+                            else:
+                                # No ·, whole line is issued_by
+                                issued_by = issued_line.replace('Issued by ', '', 1)
+                            
+                            honor_data = {
+                                'title': title,
+                                'issued_by': issued_by,
+                                'year': year
+                            }
+                            honors.append(honor_data)
+                            print(f"  ✓ {len(honors)}. {honor_data['title']}")
+                    except Exception as e:
+                        print(f"  Error parsing honor: {e}")
+                        continue
+                
+                click_back_arrow(self.driver)
+            else:
+                # No show all, extract from main page
+                print("  Extracting from main page...")
+                items = honors_section.find_elements(By.XPATH, ".//ul/li")
+                
+                for item in items:
+                    try:
+                        text = item.text.strip()
+                        if not text or len(text) < 10:
+                            continue
+                        
+                        all_lines = [l.strip() for l in text.split('\n') if l.strip()]
+                        lines = []
+                        prev = None
+                        for line in all_lines:
+                            if line != prev:
+                                lines.append(line)
+                                prev = line
+                        
+                        if len(lines) >= 2:
+                            title = lines[0]
+                            issued_line = lines[1]
+                            
+                            issued_by = ""
+                            year = ""
+                            
+                            if '·' in issued_line:
+                                parts = issued_line.split('·')
+                                issued_by = parts[0].strip()
+                                year = parts[1].strip() if len(parts) > 1 else ""
+                                if issued_by.startswith('Issued by '):
+                                    issued_by = issued_by.replace('Issued by ', '', 1)
+                            else:
+                                issued_by = issued_line.replace('Issued by ', '', 1)
+                            
+                            honor_data = {
+                                'title': title,
+                                'issued_by': issued_by,
+                                'year': year
+                            }
+                            honors.append(honor_data)
+                            print(f"  ✓ {len(honors)}. {honor_data['title']}")
+                    except Exception as e:
+                        print(f"  Error: {e}")
+                        continue
+        
+        except Exception as e:
+            print(f"Error: {e}")
+        
+        return honors
+    
     def extract_languages(self):
         """Extract languages section"""
         languages = []
@@ -959,6 +1151,298 @@ class LinkedInCrawler:
             print(f"Languages section not found")
         
         return languages
+    
+    def extract_licenses(self):
+        """Extract licenses & certifications section with show all flow"""
+        licenses = []
+        try:
+            print("Looking for licenses & certifications section...")
+            
+            licenses_section = None
+            selectors = [
+                "//section[contains(@id, 'licenses')]",
+                "//section[contains(@id, 'certifications')]",
+                "//section[.//div[@id='licenses_and_certifications']]",
+                "//section[.//h2[contains(text(), 'Licenses')]]",
+                "//section[.//h2[contains(text(), 'Certifications')]]",
+                "//section[.//span[contains(text(), 'Licenses & certifications')]]",
+            ]
+            
+            for selector in selectors:
+                try:
+                    licenses_section = self.wait.until(
+                        EC.presence_of_element_located((By.XPATH, selector))
+                    )
+                    print("✓ Found section")
+                    break
+                except TimeoutException:
+                    continue
+            
+            if not licenses_section:
+                print("⚠ Licenses & certifications section not found")
+                return licenses
+            
+            # Click "Show all"
+            clicked = click_show_all(self.driver, licenses_section)
+            
+            if clicked:
+                items = extract_items_from_detail_page(self.driver)
+                
+                for item in items:
+                    try:
+                        text = item.text.strip()
+                        if not text or len(text) < 10:
+                            continue
+                        
+                        # Remove consecutive duplicates
+                        all_lines = [l.strip() for l in text.split('\n') if l.strip()]
+                        lines = []
+                        prev = None
+                        for line in all_lines:
+                            if line != prev:
+                                lines.append(line)
+                                prev = line
+                        
+                        print(f"  License item lines: {len(lines)}")
+                        for i, line in enumerate(lines[:6]):
+                            print(f"    [{i}] {line[:80]}")
+                        
+                        # Structure after deduplication:
+                        # 0: Name
+                        # 1: Issuer
+                        # 2: Issued date (e.g., "Issued Sep 2023")
+                        # 3: Credential ID (e.g., "Credential ID: ABC123") - optional
+                        
+                        if len(lines) >= 2:
+                            name = lines[0]
+                            issuer = lines[1]
+                            issued_date = ""
+                            credential_id = ""
+                            
+                            # Extract issued date
+                            if len(lines) > 2:
+                                date_line = lines[2]
+                                if 'Issued' in date_line:
+                                    issued_date = date_line.replace('Issued ', '').strip()
+                            
+                            # Extract credential ID
+                            if len(lines) > 3:
+                                cred_line = lines[3]
+                                if 'Credential ID' in cred_line:
+                                    credential_id = cred_line.replace('Credential ID', '').replace(':', '').strip()
+                            
+                            license_data = {
+                                'name': name,
+                                'issuer': issuer,
+                                'issued_date': issued_date,
+                                'credential_id': credential_id
+                            }
+                            licenses.append(license_data)
+                            print(f"  ✓ {len(licenses)}. {license_data['name']}")
+                    except Exception as e:
+                        print(f"  Error parsing license: {e}")
+                        continue
+                
+                click_back_arrow(self.driver)
+            else:
+                # No show all, extract from main page
+                print("  Extracting from main page...")
+                items = licenses_section.find_elements(By.XPATH, ".//ul/li")
+                
+                for item in items:
+                    try:
+                        text = item.text.strip()
+                        if not text or len(text) < 10:
+                            continue
+                        
+                        all_lines = [l.strip() for l in text.split('\n') if l.strip()]
+                        lines = []
+                        prev = None
+                        for line in all_lines:
+                            if line != prev:
+                                lines.append(line)
+                                prev = line
+                        
+                        if len(lines) >= 2:
+                            name = lines[0]
+                            issuer = lines[1]
+                            issued_date = ""
+                            credential_id = ""
+                            
+                            if len(lines) > 2:
+                                date_line = lines[2]
+                                if 'Issued' in date_line:
+                                    issued_date = date_line.replace('Issued ', '').strip()
+                            
+                            if len(lines) > 3:
+                                cred_line = lines[3]
+                                if 'Credential ID' in cred_line:
+                                    credential_id = cred_line.replace('Credential ID', '').replace(':', '').strip()
+                            
+                            license_data = {
+                                'name': name,
+                                'issuer': issuer,
+                                'issued_date': issued_date,
+                                'credential_id': credential_id
+                            }
+                            licenses.append(license_data)
+                            print(f"  ✓ {len(licenses)}. {license_data['name']}")
+                    except Exception as e:
+                        print(f"  Error: {e}")
+                        continue
+        
+        except Exception as e:
+            print(f"Error: {e}")
+        
+        return licenses
+    
+    def extract_courses(self):
+        """Extract courses section with show all flow"""
+        courses = []
+        try:
+            print("Looking for courses section...")
+            
+            courses_section = None
+            selectors = [
+                "//section[contains(@id, 'courses')]",
+                "//section[.//div[@id='courses']]",
+                "//section[.//h2[contains(text(), 'Courses')]]",
+            ]
+            
+            for selector in selectors:
+                try:
+                    courses_section = self.wait.until(
+                        EC.presence_of_element_located((By.XPATH, selector))
+                    )
+                    print("✓ Found section")
+                    break
+                except TimeoutException:
+                    continue
+            
+            if not courses_section:
+                print("⚠ Courses section not found")
+                return courses
+            
+            # Click "Show all"
+            clicked = click_show_all(self.driver, courses_section)
+            
+            if clicked:
+                items = extract_items_from_detail_page(self.driver)
+                
+                for item in items:
+                    try:
+                        text = item.text.strip()
+                        if not text or len(text) < 5:
+                            continue
+                        
+                        # Remove consecutive duplicates
+                        all_lines = [l.strip() for l in text.split('\n') if l.strip()]
+                        lines = []
+                        prev = None
+                        for line in all_lines:
+                            if line != prev:
+                                lines.append(line)
+                                prev = line
+                        
+                        print(f"  Course item lines: {len(lines)}")
+                        for i, line in enumerate(lines[:5]):
+                            print(f"    [{i}] {line[:80]}")
+                        
+                        # Skip if this line is "Associated with X" (it's a duplicate from previous course)
+                        if lines[0].startswith('Associated with'):
+                            print(f"  → SKIP: Associated with line (duplicate)")
+                            continue
+                        
+                        # Structure after deduplication:
+                        # 0: Name
+                        # 1: Code (e.g., "COMP6502" or "Course number: CS101")
+                        # 2: Associated with (e.g., "Associated with University Name")
+                        
+                        if len(lines) >= 1:
+                            name = lines[0]
+                            code = ""
+                            associated_with = ""
+                            
+                            # Extract code and associated_with
+                            for line in lines[1:]:
+                                # Check if it's "Associated with"
+                                if line.startswith('Associated with'):
+                                    associated_with = line.replace('Associated with', '').strip()
+                                # Check if it's course number/code
+                                elif 'Course number' in line or 'number' in line.lower():
+                                    code = line.replace('Course number', '').replace(':', '').strip()
+                                # If it's short and alphanumeric, likely a code (e.g., "COMP6502")
+                                elif len(line) < 20 and not line.startswith('Associated'):
+                                    code = line
+                            
+                            course_data = {
+                                'name': name,
+                                'code': code,
+                                'associated_with': associated_with
+                            }
+                            courses.append(course_data)
+                            print(f"  ✓ {len(courses)}. {course_data['name']}")
+                    except Exception as e:
+                        print(f"  Error parsing course: {e}")
+                        continue
+                
+                click_back_arrow(self.driver)
+            else:
+                # No show all, extract from main page
+                print("  Extracting from main page...")
+                items = courses_section.find_elements(By.XPATH, ".//ul/li")
+                
+                for item in items:
+                    try:
+                        text = item.text.strip()
+                        if not text or len(text) < 5:
+                            continue
+                        
+                        all_lines = [l.strip() for l in text.split('\n') if l.strip()]
+                        lines = []
+                        prev = None
+                        for line in all_lines:
+                            if line != prev:
+                                lines.append(line)
+                                prev = line
+                        
+                        # Skip if this line is "Associated with X" (it's a duplicate from previous course)
+                        if lines[0].startswith('Associated with'):
+                            print(f"  → SKIP: Associated with line (duplicate)")
+                            continue
+                        
+                        if len(lines) >= 1:
+                            name = lines[0]
+                            code = ""
+                            associated_with = ""
+                            
+                            # Extract code and associated_with
+                            for line in lines[1:]:
+                                # Check if it's "Associated with"
+                                if line.startswith('Associated with'):
+                                    associated_with = line.replace('Associated with', '').strip()
+                                # Check if it's course number/code
+                                elif 'Course number' in line or 'number' in line.lower():
+                                    code = line.replace('Course number', '').replace(':', '').strip()
+                                # If it's short and alphanumeric, likely a code (e.g., "COMP6502")
+                                elif len(line) < 20 and not line.startswith('Associated'):
+                                    code = line
+                            
+                            course_data = {
+                                'name': name,
+                                'code': code,
+                                'associated_with': associated_with
+                            }
+                            courses.append(course_data)
+                            print(f"  ✓ {len(courses)}. {course_data['name']}")
+                    except Exception as e:
+                        print(f"  Error: {e}")
+                        continue
+        
+        except Exception as e:
+            print(f"Error: {e}")
+        
+        return courses
     
     def close(self):
         """Close the browser"""

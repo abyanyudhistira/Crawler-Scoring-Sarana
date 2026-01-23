@@ -15,7 +15,7 @@ COOKIES_FILE = "data/cookie/.linkedin_cookies.json"
 def save_cookies(driver):
     """Save cookies to JSON file for session persistence"""
     try:
-        Path("data").mkdir(exist_ok=True)
+        Path("data/cookie").mkdir(parents=True, exist_ok=True)
         cookies = driver.get_cookies()
         with open(COOKIES_FILE, 'w') as f:
             json.dump(cookies, f, indent=2)
@@ -31,7 +31,7 @@ def load_cookies(driver):
             return False
         
         driver.get('https://www.linkedin.com')
-        human_delay(2, 3)
+        human_delay(2, 3)  # Increased back
         
         with open(COOKIES_FILE, 'r') as f:
             cookies = json.load(f)
@@ -44,7 +44,7 @@ def load_cookies(driver):
         
         # Refresh to apply cookies
         driver.refresh()
-        human_delay(2, 3)
+        human_delay(2, 3)  # Increased back
         
         # Check if logged in
         current_url = driver.current_url

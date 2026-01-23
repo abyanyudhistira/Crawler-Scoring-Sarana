@@ -38,10 +38,10 @@ def scroll_page_to_load(driver):
     print("Scrolling page to load all content...")
     
     # Scroll down in increments
-    for i in range(5):
-        driver.execute_script("window.scrollBy(0, 800);")
-        time.sleep(1.5)
+    for i in range(4):  # Increased from 3
+        driver.execute_script("window.scrollBy(0, 1000);")
+        time.sleep(1.5)  # Increased from 1
     
     # Scroll back to top
     driver.execute_script("window.scrollTo(0, 0);")
-    time.sleep(2)
+    time.sleep(1.5)  # Increased from 1

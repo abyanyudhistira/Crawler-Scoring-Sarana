@@ -76,20 +76,20 @@ def extract_items_from_detail_page(driver):
     """Extract list items from detail page (after show all)"""
     items = []
     
-    # Wait longer for detail page to fully load
+    # Wait for detail page to fully load
     print("  Waiting for detail page to load...")
-    human_delay(4, 5)
+    human_delay(2, 3)  # Reduced from 4-5
     
-    # VERY aggressive scrolling to load ALL lazy content
+    # Aggressive scrolling to load ALL lazy content
     print("  Scrolling to load all items...")
     last_count = 0
     no_change_count = 0
-    max_scrolls = 25  # Increased from 15 to 25
+    max_scrolls = 15  # Keep same
     
     for i in range(max_scrolls):
-        # Scroll down in larger increments
+        # Scroll down
         driver.execute_script("window.scrollBy(0, 1500);")
-        human_delay(2, 2.5)  # Longer wait for lazy load
+        human_delay(1, 1.5)  # Reduced from 2-2.5
         
         # Count current items
         current_items = driver.find_elements(By.XPATH, "//main//ul[contains(@class, 'pvs-list')]/li")
@@ -99,9 +99,9 @@ def extract_items_from_detail_page(driver):
         
         if current_count == last_count:
             no_change_count += 1
-            # If no change for 4 consecutive scrolls, we're done
-            if no_change_count >= 4:
-                print(f"    No new items after 4 scrolls, stopping")
+            # If no change for 3 consecutive scrolls, we're done
+            if no_change_count >= 3:  # Reduced from 4
+                print(f"    No new items after 3 scrolls, stopping")
                 break
         else:
             no_change_count = 0
@@ -116,14 +116,14 @@ def extract_items_from_detail_page(driver):
             print(f"    Reached bottom of page")
             break
     
-    # Scroll back to top to ensure all items are in DOM
+    # Scroll back to top
     print("  Scrolling back to top...")
     driver.execute_script("window.scrollTo(0, 0);")
-    human_delay(2, 2.5)
+    human_delay(1, 1.5)  # Reduced from 2-2.5
     
-    # Scroll down a bit to middle to ensure all items visible
+    # Scroll down a bit to middle
     driver.execute_script("window.scrollTo(0, document.body.scrollHeight / 2);")
-    human_delay(1, 1.5)
+    human_delay(0.5, 1)  # Reduced from 1-1.5
     
     # Get items - try multiple selectors
     selectors = [
