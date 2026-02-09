@@ -22,25 +22,36 @@ docker-compose up -d
 
 ## Usage
 
-### Simple Mode (Tanpa RabbitMQ)
+### Multiple URLs (Recommended - Auto dari JSON)
+```bash
+python multiple.py
+```
+
+**Cara kerja:**
+1. Auto-load URLs dari semua file `profile/*.json`
+2. Skip URLs yang ada kata "sales"
+3. Process dengan 3 workers (default)
+4. Output ke `data/output/`
+
+**Format JSON di folder profile:**
+```json
+[
+  {
+    "name": "John Doe",
+    "profile_url": "https://www.linkedin.com/in/johndoe"
+  },
+  {
+    "name": "Jane Doe",
+    "profile_url": "https://www.linkedin.com/in/janedoe"
+  }
+]
+```
+
+### Simple Mode (Manual Input)
 ```bash
 python main.py
 ```
-Input URLs, tunggu selesai.
-
-### RabbitMQ Mode (Recommended untuk banyak URLs)
-
-**Terminal 1 - Start Workers:**
-```bash
-python consumer_multi.py
-```
-Input jumlah workers (default 3), workers jalan terus otomatis.
-
-**Terminal 2 - Add URLs:**
-```bash
-python producer.py
-```
-Input URLs kapan aja, workers langsung process.
+Input URLs manual, tunggu selesai.
 
 ## Monitoring
 
@@ -73,8 +84,8 @@ JSON files di folder: `data/output/`
 
 ## Files
 
-- `main.py` - Simple mode (queue biasa)
-- `producer.py` - Add URLs ke RabbitMQ
-- `consumer_multi.py` - Process URLs dengan multiple workers
-- `crawler.py` - Main scraper logic
+- `multiple.py` - **Main file** (auto-load dari JSON, 3 workers)
+- `main.py` - Simple mode (manual input)
+- `crawler.py` - Scraper logic
 - `helper/` - Helper functions
+- `profile/` - **Put your JSON files here**

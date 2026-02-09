@@ -1,8 +1,12 @@
-"""Multi-threaded Consumer - Process URLs with configurable workers"""
+"""
+LinkedIn Profile Scraper - Multiple URLs with RabbitMQ
+Auto-load URLs from profile/*.json files and process with workers
+"""
 import json
+import glob
+import os
 import threading
 import time
-from datetime import datetime
 from crawler import LinkedInCrawler
 from helper.rabbitmq_helper import RabbitMQManager, ack_message, nack_message
 from main import save_profile_data
@@ -13,6 +17,7 @@ stats = {
     'processing': 0,
     'completed': 0,
     'failed': 0,
+    'skipped': 0,
     'lock': threading.Lock()
 }
 
@@ -25,10 +30,58 @@ def print_stats():
     print(f"Processing: {stats['processing']}")
     print(f"Completed: {stats['completed']}")
     print(f"Failed: {stats['failed']}")
+    print(f"Skipped: {stats['skipped']}")
     if stats['completed'] + stats['failed'] > 0:
         success_rate = stats['completed'] / (stats['completed'] + stats['failed']) * 100
         print(f"Success Rate: {success_rate:.1f}%")
     print("="*60)
+
+
+def load_urls_from_profile_folder():
+    """Load all URLs from profile/*.json files"""
+    urls = []
+    skipped = 0
+    
+    # Get all JSON files in profile folder
+    json_files = glob.glob('profile/*.json')
+    
+    if not json_files:
+        print("⚠ No JSON files found in profile/ folder")
+        return urls, skipped
+    
+    print(f"→ Found {len(json_files)} JSON file(s) in profile/")
+    
+    for json_file in json_files:
+        try:
+            with open(json_file, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+                
+                # Handle both array and single object
+                if isinstance(data, list):
+                    profiles = data
+                else:
+                    profiles = [data]
+                
+                for profile in profiles:
+                    url = profile.get('profile_url', '')
+                    
+                    if not url:
+                        continue
+                    
+                    # Skip URLs with "sales" in them
+                    if '/sales/' in url.lower():
+                        skipped += 1
+                        print(f"  ⊘ Skipped (sales URL): {profile.get('name', 'Unknown')}")
+                        continue
+                    
+                    urls.append(url)
+                    print(f"  ✓ Added: {profile.get('name', 'Unknown')}")
+        
+        except Exception as e:
+            print(f"  ✗ Error reading {json_file}: {e}")
+            continue
+    
+    return urls, skipped
 
 
 def worker_thread(worker_id, mq_config):
@@ -138,25 +191,45 @@ def worker_thread(worker_id, mq_config):
 
 def main():
     print("="*60)
-    print("LINKEDIN SCRAPER - MULTI-WORKER CONSUMER")
+    print("LINKEDIN SCRAPER - AUTO MODE")
     print("="*60)
     
-    # Get number of workers
-    try:
-        num_workers = int(input("\nNumber of workers (default 3): ").strip() or "3")
-        if num_workers < 1:
-            num_workers = 3
-    except:
-        num_workers = 3
+    # Default 3 workers
+    num_workers = 3
+    print(f"→ Using {num_workers} workers (default)")
     
-    print(f"→ Using {num_workers} workers")
+    # Load URLs from profile folder
+    print("\n→ Loading URLs from profile/*.json files...")
+    urls, skipped_count = load_urls_from_profile_folder()
     
-    # Connect to RabbitMQ to check status
+    if not urls:
+        print("\n✗ No valid URLs found!")
+        print("  Make sure you have JSON files in profile/ folder")
+        print("  URLs with '/sales/' are automatically skipped")
+        return
+    
+    print(f"\n→ Summary:")
+    print(f"  - Valid URLs: {len(urls)}")
+    print(f"  - Skipped (sales): {skipped_count}")
+    
+    stats['skipped'] = skipped_count
+    
+    # Connect to RabbitMQ
+    print("\n→ Connecting to RabbitMQ...")
     mq = RabbitMQManager()
     if not mq.connect():
         print("✗ Failed to connect to RabbitMQ. Is it running?")
-        print("\nTo start RabbitMQ with Docker:")
+        print("\nTo start RabbitMQ:")
         print("  docker-compose up -d")
+        return
+    
+    # Publish URLs to queue
+    print(f"\n→ Publishing {len(urls)} URLs to queue...")
+    success_count = mq.publish_urls(urls)
+    
+    if success_count == 0:
+        print("✗ Failed to publish URLs")
+        mq.close()
         return
     
     # Show queue status
@@ -177,8 +250,8 @@ def main():
     mq.close()
     
     print(f"\n→ Starting {num_workers} workers...")
-    print("  Workers will automatically process URLs as they arrive")
-    print("  Press Ctrl+C to stop all workers")
+    print("  Workers will process URLs automatically")
+    print("  Press Ctrl+C to stop")
     print(f"  Management UI: http://localhost:15672 (guest/guest)")
     
     # Start worker threads
@@ -187,11 +260,9 @@ def main():
         t = threading.Thread(target=worker_thread, args=(i+1, mq_config), daemon=True)
         t.start()
         threads.append(t)
-        time.sleep(0.5)  # Small delay between starting workers
+        time.sleep(0.5)
     
     print(f"\n✓ All {num_workers} workers are running!")
-    print("  Add URLs anytime with: python producer.py")
-    print("  Statistics will update after each completed/failed task")
     
     try:
         # Keep main thread alive
@@ -210,12 +281,15 @@ def main():
         print("\n" + "="*60)
         print("FINAL RESULTS")
         print("="*60)
+        print(f"Total URLs: {len(urls)}")
         print(f"✓ Completed: {stats['completed']}")
         print(f"✗ Failed: {stats['failed']}")
+        print(f"⊘ Skipped (sales): {stats['skipped']}")
         if stats['completed'] + stats['failed'] > 0:
             success_rate = stats['completed'] / (stats['completed'] + stats['failed']) * 100
             print(f"📊 Success Rate: {success_rate:.1f}%")
         print("="*60)
+        print(f"\nOutput directory: data/output/")
 
 
 if __name__ == "__main__":
