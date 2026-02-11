@@ -20,6 +20,7 @@ class Scorer:
     def score(self, profile):
         """Calculate total score"""
         total = 0
+        max_score = 130  # Updated: 100 + 30 for demographics
         
         # 1. Skills (40 points)
         skills_score = self._score_skills(profile.get('skills', []))
@@ -37,12 +38,26 @@ class Scorer:
         edu_score = self._score_education(profile.get('education', []))
         total += edu_score
         
-        percentage = (total / 100) * 100
+        # 5. Gender (10 points) - NEW
+        gender_score = self._score_gender(profile.get('gender', 'Unknown'))
+        total += gender_score
+        
+        # 6. Location (10 points) - NEW
+        location_score = self._score_location(profile.get('location', 'N/A'))
+        total += location_score
+        
+        # 7. Age (10 points) - NEW
+        age_score = self._score_age(profile.get('estimated_age', 'Unknown'))
+        total += age_score
+        
+        percentage = (total / max_score) * 100
         
         return {
             'total_score': round(total, 2),
+            'max_score': max_score,
             'percentage': round(percentage, 2),
-            'breakdown': self.breakdown
+            'breakdown': self.breakdown,
+            'recommendation': self._get_recommendation(percentage)
         }
     
     def _score_skills(self, profile_skills):
@@ -215,6 +230,103 @@ class Scorer:
         
         self.breakdown['education'] = {'score': round(score, 2)}
         return score
+    
+    def _score_gender(self, profile_gender):
+        """Score gender match (10 points)"""
+        required_gender = self.requirements.get('required_gender', None)
+        
+        if not required_gender:
+            self.breakdown['gender'] = {'score': 10, 'note': 'No requirement'}
+            return 10
+        
+        if not profile_gender or profile_gender == 'Unknown':
+            self.breakdown['gender'] = {'score': 0, 'profile': profile_gender, 'required': required_gender}
+            return 0
+        
+        if profile_gender.lower() == required_gender.lower():
+            score = 10
+        else:
+            score = 0
+        
+        self.breakdown['gender'] = {'score': score, 'profile': profile_gender, 'required': required_gender}
+        return score
+    
+    def _score_location(self, profile_location):
+        """Score location match (10 points)"""
+        required_location = self.requirements.get('required_location', None)
+        
+        if not required_location:
+            self.breakdown['location'] = {'score': 10, 'note': 'No requirement'}
+            return 10
+        
+        if not profile_location or profile_location == 'N/A':
+            self.breakdown['location'] = {'score': 0, 'profile': profile_location, 'required': required_location}
+            return 0
+        
+        # Fuzzy match
+        similarity = fuzz.ratio(profile_location.lower(), required_location.lower())
+        
+        if similarity >= 80:
+            score = (similarity / 100) * 10
+        else:
+            score = 0
+        
+        self.breakdown['location'] = {'score': round(score, 2), 'profile': profile_location, 'required': required_location, 'similarity': similarity}
+        return score
+    
+    def _score_age(self, estimated_age):
+        """Score age range match (10 points)"""
+        required_age_range = self.requirements.get('required_age_range', None)
+        
+        if not required_age_range:
+            self.breakdown['age'] = {'score': 10, 'note': 'No requirement'}
+            return 10
+        
+        if not estimated_age or estimated_age == 'Unknown':
+            self.breakdown['age'] = {'score': 0, 'estimated': estimated_age, 'required': required_age_range}
+            return 0
+        
+        # Extract age value
+        age_value = None
+        if isinstance(estimated_age, dict):
+            age_value = estimated_age.get('estimated_age')
+        elif isinstance(estimated_age, (int, float)):
+            age_value = estimated_age
+        
+        if not age_value:
+            self.breakdown['age'] = {'score': 0, 'estimated': estimated_age, 'required': required_age_range}
+            return 0
+        
+        min_age = required_age_range.get('min', 0)
+        max_age = required_age_range.get('max', 100)
+        
+        if min_age <= age_value <= max_age:
+            score = 10
+        else:
+            # Partial points if close (within 5 years)
+            if age_value < min_age:
+                diff = min_age - age_value
+            else:
+                diff = age_value - max_age
+            
+            if diff <= 5:
+                score = max(0, 10 - (diff * 2))
+            else:
+                score = 0
+        
+        self.breakdown['age'] = {'score': round(score, 2), 'estimated': age_value, 'required': f"{min_age}-{max_age}"}
+        return score
+    
+    def _get_recommendation(self, percentage):
+        """Get hiring recommendation based on percentage"""
+        if percentage >= 80:
+            return "Highly Recommended - Strong match"
+        elif percentage >= 60:
+            return "Recommended - Good match"
+        elif percentage >= 40:
+            return "Consider - Moderate match"
+        else:
+            return "Not Recommended - Weak match"
 
 
 def batch_score(profiles_dir, requirements_id):

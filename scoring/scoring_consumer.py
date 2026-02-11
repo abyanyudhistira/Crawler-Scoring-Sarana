@@ -7,7 +7,8 @@ import threading
 import time
 from datetime import datetime
 import pika
-from scorer import ProfileScorer
+from score import Scorer
+from supabase import create_client, Client
 
 
 # Configuration
@@ -17,14 +18,23 @@ RABBITMQ_USER = os.getenv('RABBITMQ_USER', 'guest')
 RABBITMQ_PASSWORD = os.getenv('RABBITMQ_PASSWORD', 'guest')
 SCORING_QUEUE = os.getenv('SCORING_QUEUE', 'scoring_queue')
 
+# Supabase Configuration
+SUPABASE_URL = os.getenv('SUPABASE_URL', 'https://hzkgpdnlkihnlosxwwig.supabase.co')
+SUPABASE_KEY = os.getenv('SUPABASE_KEY', 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imh6a2dwZG5sa2lobmxvc3h3d2lnIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Njc2ODQ1NzYsImV4cCI6MjA4MzI2MDU3Nn0.M8aoPh1BrSGr47ix0Fd9jUJdK16Vd_MIge4uXKcHlHc')
+
 OUTPUT_DIR = 'data/scores'
 REQUIREMENTS_DIR = 'requirements'
+
+# Initialize Supabase client
+supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 # Statistics
 stats = {
     'processing': 0,
     'completed': 0,
     'failed': 0,
+    'supabase_updated': 0,
+    'supabase_failed': 0,
     'lock': threading.Lock()
 }
 
@@ -79,6 +89,29 @@ def save_score_result(profile_data, score_result, requirements_id):
     return filepath
 
 
+def update_supabase_score(profile_url, total_score):
+    """Update score in Supabase leads_list table"""
+    try:
+        print(f"📤 Updating Supabase...")
+        
+        # Update score in leads_list table where profile_url matches
+        response = supabase.table('leads_list').update({
+            'score': total_score
+        }).eq('profile_url', profile_url).execute()
+        
+        # Check if update was successful
+        if response.data:
+            print(f"✓ Supabase updated: {profile_url} → score: {total_score}")
+            return True
+        else:
+            print(f"⚠ No matching profile_url found in Supabase: {profile_url}")
+            return False
+    
+    except Exception as e:
+        print(f"✗ Failed to update Supabase: {e}")
+        return False
+
+
 def print_stats():
     """Print current statistics"""
     print("\n" + "="*60)
@@ -87,6 +120,8 @@ def print_stats():
     print(f"Processing: {stats['processing']}")
     print(f"Completed: {stats['completed']}")
     print(f"Failed: {stats['failed']}")
+    print(f"Supabase Updated: {stats['supabase_updated']}")
+    print(f"Supabase Failed: {stats['supabase_failed']}")
     if stats['completed'] + stats['failed'] > 0:
         success_rate = stats['completed'] / (stats['completed'] + stats['failed']) * 100
         print(f"Success Rate: {success_rate:.1f}%")
@@ -116,8 +151,8 @@ def process_message(message_data):
         
         # Calculate score
         print(f"🔢 Calculating score...")
-        scorer = ProfileScorer(requirements)
-        score_result = scorer.calculate_score(profile_data)
+        scorer = Scorer(requirements)
+        score_result = scorer.score(profile_data)
         
         # Print result
         print(f"\n{'='*60}")
@@ -125,16 +160,31 @@ def process_message(message_data):
         print(f"{'='*60}")
         print(f"Total Score: {score_result['total_score']}/{score_result['max_score']}")
         print(f"Percentage: {score_result['percentage']}%")
-        print(f"Recommendation: {score_result['recommendation']}")
+        
+        breakdown = score_result.get('breakdown', {})
         print(f"\nBreakdown:")
-        print(f"  - Skills: {score_result['breakdown']['skills']['score']}/40")
-        print(f"  - Text Similarity: {score_result['breakdown']['text_similarity']['score']}/30")
-        print(f"  - Experience: {score_result['breakdown']['experience']['score']}/20")
-        print(f"  - Education: {score_result['breakdown']['education']['score']}/10")
+        print(f"  - Skills: {breakdown.get('skills', {}).get('score', 0)}/40")
+        print(f"  - Text Similarity: {breakdown.get('text_similarity', {}).get('score', 0)}/30")
+        print(f"  - Experience: {breakdown.get('experience', {}).get('score', 0)}/20")
+        print(f"  - Education: {breakdown.get('education', {}).get('score', 0)}/10")
+        print(f"  - Gender: {breakdown.get('gender', {}).get('score', 0)}/10")
+        print(f"  - Location: {breakdown.get('location', {}).get('score', 0)}/10")
+        print(f"  - Age: {breakdown.get('age', {}).get('score', 0)}/10")
         print(f"{'='*60}")
         
         # Save result
         save_score_result(profile_data, score_result, requirements_id)
+        
+        # Update Supabase
+        profile_url = profile_data.get('profile_url', '')
+        total_score = score_result.get('total_score', 0)
+        if profile_url:
+            if update_supabase_score(profile_url, total_score):
+                with stats['lock']:
+                    stats['supabase_updated'] += 1
+            else:
+                with stats['lock']:
+                    stats['supabase_failed'] += 1
         
         print(f"✓ Completed: {name} - Score: {score_result['percentage']}%")
         

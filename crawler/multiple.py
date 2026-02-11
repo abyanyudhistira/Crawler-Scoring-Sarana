@@ -37,8 +37,35 @@ def print_stats():
     print("="*60)
 
 
-def load_urls_from_profile_folder():
-    """Load all URLs from profile/*.json files"""
+def load_crawled_urls():
+    """Load all URLs that have been crawled from output folder"""
+    crawled_urls = set()
+    output_dir = 'data/output'
+    
+    if not os.path.exists(output_dir):
+        return crawled_urls
+    
+    output_files = glob.glob(f'{output_dir}/*.json')
+    
+    for output_file in output_files:
+        try:
+            with open(output_file, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+                url = data.get('profile_url', '')
+                if url:
+                    crawled_urls.add(url)
+        except Exception as e:
+            # Skip files that can't be read
+            continue
+    
+    return crawled_urls
+
+
+def load_urls_from_profile_folder(crawled_urls=None):
+    """Load all URLs from profile/*.json files, skip already crawled ones"""
+    if crawled_urls is None:
+        crawled_urls = set()
+    
     urls = []
     skipped = 0
     
@@ -72,6 +99,12 @@ def load_urls_from_profile_folder():
                     if '/sales/' in url.lower():
                         skipped += 1
                         print(f"  ⊘ Skipped (sales URL): {profile.get('name', 'Unknown')}")
+                        continue
+                    
+                    # Skip if already crawled
+                    if url in crawled_urls:
+                        skipped += 1
+                        print(f"  ⊘ Skipped (already crawled): {profile.get('name', 'Unknown')}")
                         continue
                     
                     urls.append(url)
@@ -198,19 +231,25 @@ def main():
     num_workers = 3
     print(f"→ Using {num_workers} workers (default)")
     
+    # Load already crawled URLs
+    print("\n→ Loading already crawled URLs from data/output/...")
+    crawled_urls = load_crawled_urls()
+    print(f"  ✓ Found {len(crawled_urls)} already crawled profiles")
+    
     # Load URLs from profile folder
     print("\n→ Loading URLs from profile/*.json files...")
-    urls, skipped_count = load_urls_from_profile_folder()
+    urls, skipped_count = load_urls_from_profile_folder(crawled_urls)
     
     if not urls:
         print("\n✗ No valid URLs found!")
         print("  Make sure you have JSON files in profile/ folder")
         print("  URLs with '/sales/' are automatically skipped")
+        print("  Already crawled URLs are also skipped")
         return
     
     print(f"\n→ Summary:")
     print(f"  - Valid URLs: {len(urls)}")
-    print(f"  - Skipped (sales): {skipped_count}")
+    print(f"  - Skipped: {skipped_count}")
     
     stats['skipped'] = skipped_count
     

@@ -36,6 +36,12 @@
     "CRM": 1,
     "Collection System": 1
   },
-  "min_experience_years": 1,
-  "education_level": ["High School", "Diploma", "Bachelor"]
+  "min_experience_years": 3,
+  "education_level": ["High School", "Diploma", "Bachelor"],
+  "required_gender": "Female",
+  "required_location": "Bandung",
+  "required_age_range": {
+    "min": 20,
+    "max": 35
+  }
 }

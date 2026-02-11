@@ -7,6 +7,7 @@ import glob
 import os
 import threading
 import time
+import pika
 from crawler import LinkedInCrawler
 from helper.rabbitmq_helper import RabbitMQManager, ack_message, nack_message
 from main import save_profile_data
@@ -14,7 +15,7 @@ from main import save_profile_data
 
 # Configuration
 SCORING_QUEUE = os.getenv('SCORING_QUEUE', 'scoring_queue')
-DEFAULT_REQUIREMENTS_ID = os.getenv('DEFAULT_REQUIREMENTS_ID', 'backend_dev_senior')
+DEFAULT_REQUIREMENTS_ID = os.getenv('DEFAULT_REQUIREMENTS_ID', 'desk_collection')
 
 # Statistics
 stats = {
@@ -71,7 +72,9 @@ def send_to_scoring_queue(profile_data, requirements_id, mq_config):
             exchange='',
             routing_key=SCORING_QUEUE,
             body=json.dumps(message),
-            properties=mq.get_message_properties()
+            properties=pika.BasicProperties(
+                delivery_mode=2,  # Make message persistent
+            )
         )
         
         mq.close()
@@ -83,8 +86,35 @@ def send_to_scoring_queue(profile_data, requirements_id, mq_config):
         return False
 
 
-def load_urls_from_profile_folder():
-    """Load all URLs from profile/*.json files"""
+def load_crawled_urls():
+    """Load all URLs that have been crawled from output folder"""
+    crawled_urls = set()
+    output_dir = 'data/output'
+    
+    if not os.path.exists(output_dir):
+        return crawled_urls
+    
+    output_files = glob.glob(f'{output_dir}/*.json')
+    
+    for output_file in output_files:
+        try:
+            with open(output_file, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+                url = data.get('profile_url', '')
+                if url:
+                    crawled_urls.add(url)
+        except Exception as e:
+            # Skip files that can't be read
+            continue
+    
+    return crawled_urls
+
+
+def load_urls_from_profile_folder(crawled_urls=None):
+    """Load all URLs from profile/*.json files, skip already crawled ones"""
+    if crawled_urls is None:
+        crawled_urls = set()
+    
     urls = []
     skipped = 0
     
@@ -118,6 +148,12 @@ def load_urls_from_profile_folder():
                     if '/sales/' in url.lower():
                         skipped += 1
                         print(f"  ⊘ Skipped (sales URL): {profile.get('name', 'Unknown')}")
+                        continue
+                    
+                    # Skip if already crawled
+                    if url in crawled_urls:
+                        skipped += 1
+                        print(f"  ⊘ Skipped (already crawled): {profile.get('name', 'Unknown')}")
                         continue
                     
                     urls.append(url)
@@ -246,13 +282,20 @@ def main():
     print("LINKEDIN SCRAPER + SCORING INTEGRATION")
     print("="*60)
     
-    # Get requirements ID
+    # Get requirements ID - list from scoring/requirements folder
     print(f"\nAvailable requirements:")
-    print("  - backend_dev_senior")
-    print("  - frontend_dev")
-    print("  - fullstack_dev")
-    print("  - data_scientist")
-    print("  - devops_engineer")
+    requirements_dir = '../scoring/requirements'
+    if os.path.exists(requirements_dir):
+        req_files = [f.replace('.json', '') for f in os.listdir(requirements_dir) if f.endswith('.json')]
+        for req in sorted(req_files):
+            print(f"  - {req}")
+    else:
+        print("  - desk_collection (default)")
+        print("  - backend_dev_senior")
+        print("  - frontend_dev")
+        print("  - fullstack_dev")
+        print("  - data_scientist")
+        print("  - devops_engineer")
     
     requirements_id = input(f"\nRequirements ID (default: {DEFAULT_REQUIREMENTS_ID}): ").strip()
     if not requirements_id:
@@ -264,19 +307,25 @@ def main():
     num_workers = 3
     print(f"→ Using {num_workers} workers (default)")
     
+    # Load already crawled URLs
+    print("\n→ Loading already crawled URLs from data/output/...")
+    crawled_urls = load_crawled_urls()
+    print(f"  ✓ Found {len(crawled_urls)} already crawled profiles")
+    
     # Load URLs from profile folder
     print("\n→ Loading URLs from profile/*.json files...")
-    urls, skipped_count = load_urls_from_profile_folder()
+    urls, skipped_count = load_urls_from_profile_folder(crawled_urls)
     
     if not urls:
         print("\n✗ No valid URLs found!")
         print("  Make sure you have JSON files in profile/ folder")
         print("  URLs with '/sales/' are automatically skipped")
+        print("  Already crawled URLs are also skipped")
         return
     
     print(f"\n→ Summary:")
     print(f"  - Valid URLs: {len(urls)}")
-    print(f"  - Skipped (sales): {skipped_count}")
+    print(f"  - Skipped: {skipped_count}")
     print(f"  - Requirements: {requirements_id}")
     
     stats['skipped'] = skipped_count

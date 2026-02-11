@@ -6,6 +6,9 @@ from selenium.common.exceptions import NoSuchElementException, TimeoutException
 from helper.browser_helper import human_delay, smooth_scroll, scroll_page_to_load, create_driver
 from helper.auth_helper import login
 from helper.extraction_helper import click_show_all, click_back_arrow, extract_items_from_detail_page
+import gender_guesser.detector as gender
+import re
+from datetime import datetime
 
 
 class LinkedInCrawler:
@@ -13,6 +16,7 @@ class LinkedInCrawler:
         """Initialize crawler with browser"""
         self.driver = create_driver()
         self.wait = WebDriverWait(self.driver, 10)
+        self.gender_detector = gender.Detector()
     
     def login(self):
         """Login to LinkedIn"""
@@ -50,51 +54,63 @@ class LinkedInCrawler:
         # Add profile URL first
         data['profile_url'] = url
         
-        print("\n[1/6] Extracting name...")
+        print("\n[1/15] Extracting name...")
         data['name'] = self.extract_name()
         print(f"→ {data['name']}")
         
-        print("\n[2/6] Extracting about...")
+        print("\n[2/15] Extracting gender (pronouns)...")
+        data['gender'] = self.extract_gender()
+        print(f"→ {data['gender']}")
+        
+        print("\n[3/15] Extracting location...")
+        data['location'] = self.extract_location()
+        print(f"→ {data['location']}")
+        
+        print("\n[4/15] Extracting about...")
         data['about'] = self.extract_about()
         print(f"→ {len(data['about'])} characters")
         
-        print("\n[3/6] Extracting experiences...")
+        print("\n[5/15] Extracting experiences...")
         data['experiences'] = self.extract_experiences()
         print(f"→ Found {len(data['experiences'])} experiences")
         
-        print("\n[4/6] Extracting education...")
+        print("\n[6/15] Extracting education...")
         data['education'] = self.extract_education()
         print(f"→ Found {len(data['education'])} education entries")
         
-        print("\n[5/6] Extracting skills...")
+        print("\n[7/15] Extracting estimated age...")
+        data['estimated_age'] = self.estimate_age(data['education'])
+        print(f"→ {data['estimated_age']}")
+        
+        print("\n[8/15] Extracting skills...")
         data['skills'] = self.extract_skills()
         print(f"→ Found {len(data['skills'])} skills")
         
-        print("\n[6/7] Extracting projects...")
+        print("\n[9/15] Extracting projects...")
         data['projects'] = self.extract_projects()
         print(f"→ Found {len(data['projects'])} projects")
         
-        print("\n[7/8] Extracting honors & awards...")
+        print("\n[10/15] Extracting honors & awards...")
         data['honors'] = self.extract_honors()
         print(f"→ Found {len(data['honors'])} honors & awards")
         
-        print("\n[8/10] Extracting languages...")
+        print("\n[11/15] Extracting languages...")
         data['languages'] = self.extract_languages()
         print(f"→ Found {len(data['languages'])} languages")
         
-        print("\n[9/10] Extracting licenses & certifications...")
+        print("\n[12/15] Extracting licenses & certifications...")
         data['licenses'] = self.extract_licenses()
         print(f"→ Found {len(data['licenses'])} licenses & certifications")
         
-        print("\n[10/11] Extracting courses...")
+        print("\n[13/15] Extracting courses...")
         data['courses'] = self.extract_courses()
         print(f"→ Found {len(data['courses'])} courses")
         
-        print("\n[11/12] Extracting volunteering...")
+        print("\n[14/15] Extracting volunteering...")
         data['volunteering'] = self.extract_volunteering()
         print(f"→ Found {len(data['volunteering'])} volunteering experiences")
         
-        print("\n[12/12] Extracting test scores...")
+        print("\n[15/15] Extracting test scores...")
         data['test_scores'] = self.extract_test_scores()
         print(f"→ Found {len(data['test_scores'])} test scores")
         
@@ -125,6 +141,245 @@ class LinkedInCrawler:
         print("⚠ Name not found! Current URL:", self.driver.current_url)
         print("⚠ Page title:", self.driver.title)
         return "N/A"
+    
+    def extract_gender(self):
+        """Extract gender from pronouns (He/Him, She/Her, They/Them) with name-based fallback"""
+        try:
+            # Step 1: Try to find pronouns (most accurate)
+            pronouns_gender = self._extract_gender_from_pronouns()
+            if pronouns_gender != "N/A":
+                return pronouns_gender
+            
+            # Step 2: Fallback to name-based prediction
+            print("  No pronouns found, trying name-based prediction...")
+            name = self.extract_name()
+            if name and name != "N/A":
+                predicted_gender = self._predict_gender_from_name(name)
+                return predicted_gender
+            
+            return "Unknown"
+        except Exception as e:
+            print(f"  Error extracting gender: {e}")
+            return "Unknown"
+    
+    def _extract_gender_from_pronouns(self):
+        """Extract gender from pronouns in profile header"""
+        try:
+            # Pronouns appear next to name in profile header with smaller font
+            selectors = [
+                (By.XPATH, "//h1[contains(@class, 'text-heading-xlarge')]/..//span[contains(@class, 'text-body-small')]"),
+                (By.XPATH, "//h1[contains(@class, 'text-heading-xlarge')]/following-sibling::*//span"),
+                (By.XPATH, "//div[.//h1[contains(@class, 'text-heading-xlarge')]]//span[contains(@class, 'text-body-small')]"),
+                (By.XPATH, "//main//section[1]//span[contains(@class, 'text-body-small')]"),
+            ]
+            
+            for by, selector in selectors:
+                try:
+                    elements = self.driver.find_elements(by, selector)
+                    
+                    for element in elements:
+                        text = element.text.strip().lower()
+                        
+                        # Skip empty or very long text (not pronouns)
+                        if not text or len(text) > 20:
+                            continue
+                        
+                        # Check if it contains pronouns pattern
+                        if '/' in text:
+                            # Map pronouns to gender
+                            if 'he' in text and 'him' in text:
+                                print(f"  Found pronouns: {element.text.strip()} → Male")
+                                return 'Male'
+                            elif 'she' in text and 'her' in text:
+                                print(f"  Found pronouns: {element.text.strip()} → Female")
+                                return 'Female'
+                            elif 'they' in text and 'them' in text:
+                                print(f"  Found pronouns: {element.text.strip()} → Non-binary")
+                                return 'Non-binary'
+                    
+                except NoSuchElementException:
+                    continue
+            
+            return "N/A"
+        except Exception as e:
+            print(f"  Error in pronoun extraction: {e}")
+            return "N/A"
+    
+    def _predict_gender_from_name(self, full_name):
+        """Predict gender from name using gender-guesser library"""
+        try:
+            # Clean and extract first name
+            # Handle cases like "Sri.Mah Gunawan" → try "Sri", "Mah", "Gunawan"
+            name_parts = full_name.replace('.', ' ').replace(',', ' ').split()
+            
+            if not name_parts:
+                return "Unknown"
+            
+            # Try first name first
+            first_name = name_parts[0]
+            result = self.gender_detector.get_gender(first_name)
+            
+            # gender-guesser returns: male, female, mostly_male, mostly_female, andy (androgynous), unknown
+            if result in ['male', 'mostly_male']:
+                print(f"  Name prediction: '{first_name}' → Male (confidence: {result})")
+                return 'Male'
+            elif result in ['female', 'mostly_female']:
+                print(f"  Name prediction: '{first_name}' → Female (confidence: {result})")
+                return 'Female'
+            elif result == 'andy':
+                print(f"  Name prediction: '{first_name}' → Ambiguous")
+                # Try second name if exists
+                if len(name_parts) > 1:
+                    second_name = name_parts[1]
+                    result2 = self.gender_detector.get_gender(second_name)
+                    if result2 in ['male', 'mostly_male']:
+                        print(f"  Second name '{second_name}' → Male")
+                        return 'Male'
+                    elif result2 in ['female', 'mostly_female']:
+                        print(f"  Second name '{second_name}' → Female")
+                        return 'Female'
+                return 'Unknown'
+            else:
+                print(f"  Name prediction: '{first_name}' → Unknown")
+                # Try last name as fallback (for cases like "Sri.Mah Gunawan")
+                if len(name_parts) > 1:
+                    last_name = name_parts[-1]
+                    result_last = self.gender_detector.get_gender(last_name)
+                    if result_last in ['male', 'mostly_male']:
+                        print(f"  Last name '{last_name}' → Male")
+                        return 'Male'
+                    elif result_last in ['female', 'mostly_female']:
+                        print(f"  Last name '{last_name}' → Female")
+                        return 'Female'
+                
+                return 'Unknown'
+        
+        except Exception as e:
+            print(f"  Error in name-based prediction: {e}")
+            return "Unknown"
+    
+    def extract_location(self):
+        """Extract location (city) from profile header"""
+        try:
+            # Location is usually in the profile header section
+            # Format: "Bandung, West Java, Indonesia"
+            selectors = [
+                (By.XPATH, "//div[contains(@class, 'mt2')]//span[contains(@class, 'text-body-small') and contains(., ',')]"),
+                (By.XPATH, "//span[contains(@class, 'text-body-small') and contains(., 'Indonesia') or contains(., 'Jakarta') or contains(., 'Bandung') or contains(., 'Surabaya')]"),
+                (By.CSS_SELECTOR, "div.mt2 span.text-body-small"),
+            ]
+            
+            for by, selector in selectors:
+                try:
+                    element = self.driver.find_element(by, selector)
+                    location_text = element.text.strip()
+                    
+                    # Skip if it's not a location (e.g., pronouns, contact info)
+                    if not location_text or len(location_text) < 3:
+                        continue
+                    
+                    # Skip if it looks like pronouns
+                    if '/' in location_text:
+                        continue
+                    
+                    # Extract city (first part before comma)
+                    if ',' in location_text:
+                        city = location_text.split(',')[0].strip()
+                        return city
+                    else:
+                        return location_text
+                    
+                except NoSuchElementException:
+                    continue
+            
+            return "N/A"
+        except Exception as e:
+            print(f"  Error extracting location: {e}")
+            return "N/A"
+    
+    def estimate_age(self, education_data):
+        """Estimate age from education graduation years"""
+        try:
+            if not education_data or len(education_data) == 0:
+                return "Unknown"
+            
+            current_year = datetime.now().year
+            graduation_years = []
+            
+            # Extract graduation years from education
+            for edu in education_data:
+                if not isinstance(edu, dict):
+                    continue
+                
+                year_str = edu.get('year', '')
+                if not year_str or year_str == 'N/A':
+                    continue
+                
+                # Extract year number (handle "2020", "2018 - 2020", etc)
+                year_match = re.findall(r'\d{4}', year_str)
+                if year_match:
+                    # Get the latest year (graduation year)
+                    year = int(year_match[-1])
+                    graduation_years.append({
+                        'year': year,
+                        'degree': edu.get('degree', '').lower(),
+                        'school': edu.get('school', '')
+                    })
+            
+            if not graduation_years:
+                return "Unknown"
+            
+            # Sort by year (most recent first)
+            graduation_years.sort(key=lambda x: x['year'], reverse=True)
+            
+            # Use the most recent graduation to estimate age
+            latest_grad = graduation_years[0]
+            grad_year = latest_grad['year']
+            degree = latest_grad['degree']
+            
+            # Estimate graduation age based on degree level
+            # High School: ~18 years old
+            # Bachelor/S1: ~22 years old
+            # Master/S2: ~24 years old
+            # Doctoral/PhD/S3: ~27 years old
+            
+            if any(keyword in degree for keyword in ['high school', 'sma', 'smk', 'smu']):
+                graduation_age = 18
+            elif any(keyword in degree for keyword in ['master', 's2', 'magister', 'mba']):
+                graduation_age = 24
+            elif any(keyword in degree for keyword in ['doctor', 'phd', 's3', 'doctoral']):
+                graduation_age = 27
+            elif any(keyword in degree for keyword in ['bachelor', 's1', 'sarjana', 'degree']):
+                graduation_age = 22
+            elif any(keyword in degree for keyword in ['diploma', 'd3', 'd4']):
+                graduation_age = 21
+            else:
+                # Default to bachelor's age if degree type unclear
+                graduation_age = 22
+            
+            # Calculate estimated current age
+            estimated_age = (current_year - grad_year) + graduation_age
+            
+            # Sanity check: age should be between 18-70
+            if estimated_age < 18 or estimated_age > 70:
+                print(f"  Age estimation out of range: {estimated_age} (grad year: {grad_year}, degree: {degree})")
+                return "Unknown"
+            
+            # Return age range (±2 years for uncertainty)
+            age_min = max(18, estimated_age - 2)
+            age_max = min(70, estimated_age + 2)
+            
+            print(f"  Estimated from {degree} graduation ({grad_year}): ~{estimated_age} years old (range: {age_min}-{age_max})")
+            
+            return {
+                'estimated_age': estimated_age,
+                'age_range': f"{age_min}-{age_max}",
+                'based_on': f"{degree} graduation in {grad_year}"
+            }
+        
+        except Exception as e:
+            print(f"  Error estimating age: {e}")
+            return "Unknown"
     
     def extract_about(self):
         """Extract about section"""
