@@ -1,9 +1,19 @@
 """Browser setup and utility functions"""
 import time
 import random
+import os
 from selenium import webdriver
 from selenium.webdriver.chrome.service import Service as ChromeService
 from selenium.webdriver.support.ui import WebDriverWait
+
+
+# Load delay configuration from environment
+try:
+    MIN_DELAY = float(os.getenv('MIN_DELAY', '0.5'))
+    MAX_DELAY = float(os.getenv('MAX_DELAY', '1.0'))
+except:
+    MIN_DELAY = 0.5
+    MAX_DELAY = 1.0
 
 
 def create_driver():
@@ -151,8 +161,12 @@ def create_driver():
     return driver
 
 
-def human_delay(min_sec=1.5, max_sec=3.0):
+def human_delay(min_sec=None, max_sec=None):
     """Random delay to mimic human behavior"""
+    if min_sec is None:
+        min_sec = MIN_DELAY
+    if max_sec is None:
+        max_sec = MAX_DELAY
     delay = random.uniform(min_sec, max_sec)
     time.sleep(delay)
 
@@ -180,7 +194,7 @@ def smooth_scroll(driver, element):
         "arguments[0].scrollIntoView({behavior: 'smooth', block: 'center'});",
         element
     )
-    time.sleep(random.uniform(0.8, 1.5))
+    time.sleep(random.uniform(0.3, 0.6))
 
 
 def scroll_page_to_load(driver):
@@ -191,20 +205,20 @@ def scroll_page_to_load(driver):
     last_height = driver.execute_script("return document.body.scrollHeight")
     
     # Scroll down in random increments (human-like)
-    scroll_pause_time = random.uniform(1.5, 2.5)
+    scroll_pause_time = random.uniform(0.5, 0.8)
     
-    for i in range(5):
+    for i in range(3):  # Reduced from 5 to 3
         # Random scroll amount (not always same)
-        scroll_amount = random.randint(800, 1200)
+        scroll_amount = random.randint(1000, 1500)
         driver.execute_script(f"window.scrollBy(0, {scroll_amount});")
         
         # Random pause (human behavior)
-        time.sleep(random.uniform(1.0, 2.0))
+        time.sleep(random.uniform(0.3, 0.6))
         
-        # Sometimes scroll up a bit (human behavior)
-        if random.random() > 0.7:
+        # Sometimes scroll up a bit (human behavior) - reduced frequency
+        if random.random() > 0.85:
             driver.execute_script(f"window.scrollBy(0, -{random.randint(100, 300)});")
-            time.sleep(random.uniform(0.5, 1.0))
+            time.sleep(random.uniform(0.2, 0.4))
     
     # Scroll to bottom
     driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
@@ -219,4 +233,4 @@ def scroll_page_to_load(driver):
     
     # Scroll back to top (human behavior)
     driver.execute_script("window.scrollTo(0, 0);")
-    time.sleep(random.uniform(1.0, 1.5))
+    time.sleep(random.uniform(0.3, 0.5))

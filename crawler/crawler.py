@@ -33,10 +33,10 @@ class LinkedInCrawler:
             self.wait.until(
                 EC.presence_of_element_located((By.TAG_NAME, "main"))
             )
-            human_delay(3, 4)
+            human_delay(1, 1.5)
         except TimeoutException:
             print("⚠ Page load timeout! Content may not be available.")
-            human_delay(5, 6)  # Wait longer
+            human_delay(2, 3)  # Wait longer
         
         # Scroll to load all sections
         scroll_page_to_load(self.driver)
@@ -395,7 +395,7 @@ class LinkedInCrawler:
             try:
                 see_more = about_section.find_element(By.XPATH, ".//button[contains(., 'more')]")
                 see_more.click()
-                human_delay(1, 1.5)
+                human_delay(0.5, 0.8)
             except:
                 pass
             
@@ -983,12 +983,12 @@ class LinkedInCrawler:
                                 
                                 # Scroll to button
                                 self.driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", show_details_btn)
-                                human_delay(0.5, 1)
+                                human_delay(0.3, 0.5)
                                 
                                 # Click to open modal
                                 self.driver.execute_script("arguments[0].click();", show_details_btn)
                                 print(f"    → Clicked 'Show all details'")
-                                human_delay(2, 3)
+                                human_delay(0.8, 1.2)
                                 
                                 # Extract details from modal
                                 modal_items = self.driver.find_elements(By.XPATH, 
@@ -1025,7 +1025,7 @@ class LinkedInCrawler:
                                         close_btn = self.driver.find_element(By.XPATH, close_selector)
                                         self.driver.execute_script("arguments[0].click();", close_btn)
                                         print(f"    → Closed modal")
-                                        human_delay(1, 1.5)
+                                        human_delay(0.3, 0.5)
                                         break
                                     except:
                                         continue
@@ -1390,7 +1390,7 @@ class LinkedInCrawler:
                 return languages
             
             smooth_scroll(self.driver, lang_section)
-            human_delay(1, 2)
+            human_delay(0.3, 0.5)
             
             items = lang_section.find_elements(By.XPATH, ".//ul/li")
             

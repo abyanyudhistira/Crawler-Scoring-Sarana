@@ -1,15 +1,22 @@
 """
 Scoring Consumer - Process profiles from RabbitMQ and calculate scores
+OPTIMIZED VERSION
 """
 import json
 import os
 import threading
 import time
+import re
+import hashlib
+import glob
 from datetime import datetime
 import pika
-from score import Scorer
+from dotenv import load_dotenv
+from rapidfuzz import fuzz
 from supabase import create_client, Client
 
+# Load environment variables
+load_dotenv()
 
 # Configuration
 RABBITMQ_HOST = os.getenv('RABBITMQ_HOST', 'localhost')
@@ -19,24 +26,232 @@ RABBITMQ_PASSWORD = os.getenv('RABBITMQ_PASSWORD', 'guest')
 SCORING_QUEUE = os.getenv('SCORING_QUEUE', 'scoring_queue')
 
 # Supabase Configuration
-SUPABASE_URL = os.getenv('SUPABASE_URL', 'https://hzkgpdnlkihnlosxwwig.supabase.co')
-SUPABASE_KEY = os.getenv('SUPABASE_KEY', 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imh6a2dwZG5sa2lobmxvc3h3d2lnIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Njc2ODQ1NzYsImV4cCI6MjA4MzI2MDU3Nn0.M8aoPh1BrSGr47ix0Fd9jUJdK16Vd_MIge4uXKcHlHc')
+SUPABASE_URL = os.getenv('SUPABASE_URL')
+SUPABASE_KEY = os.getenv('SUPABASE_KEY')
 
 OUTPUT_DIR = 'data/scores'
 REQUIREMENTS_DIR = 'requirements'
 
-# Initialize Supabase client
-supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+# Initialize Supabase client (only if credentials provided)
+supabase: Client = None
+if SUPABASE_URL and SUPABASE_KEY:
+    try:
+        supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+        print("✓ Supabase connected")
+    except Exception as e:
+        print(f"⚠ Supabase connection failed: {e}")
+else:
+    print("⚠ Supabase credentials not found in .env")
 
 # Statistics
 stats = {
     'processing': 0,
     'completed': 0,
     'failed': 0,
+    'skipped': 0,
     'supabase_updated': 0,
     'supabase_failed': 0,
     'lock': threading.Lock()
 }
+
+
+class OptimizedScorer:
+    """Optimized Scorer - Focus on skills"""
+    def __init__(self, requirements):
+        self.requirements = requirements
+        self.breakdown = {}
+    
+    def score(self, profile):
+        """Calculate total score - OPTIMIZED"""
+        total = 0
+        
+        # 1. Skills (70 points) - PRIORITAS UTAMA
+        skills_score = self._score_skills(profile.get('skills', []))
+        total += skills_score
+        
+        # 2. Experience (20 points)
+        exp_score = self._score_experience(profile.get('experiences', []))
+        total += exp_score
+        
+        # 3. Education (10 points)
+        edu_score = self._score_education(profile.get('education', []))
+        total += edu_score
+        
+        percentage = (total / 100) * 100
+        
+        return {
+            'total_score': round(total, 2),
+            'percentage': round(percentage, 2),
+            'breakdown': self.breakdown
+        }
+    
+    def _score_skills(self, profile_skills):
+        """Score skills (70 points) - OPTIMIZED"""
+        required = self.requirements.get('required_skills', {})
+        preferred = self.requirements.get('preferred_skills', {})
+        
+        # Normalize skills
+        skills_list = []
+        if isinstance(profile_skills, list):
+            for s in profile_skills:
+                if isinstance(s, dict):
+                    name = s.get('name', '')
+                    if name and name != 'N/A':
+                        skills_list.append(name.lower().strip())
+                elif isinstance(s, str) and s and s != 'N/A':
+                    skills_list.append(s.lower().strip())
+        
+        # Score required (50 points)
+        req_score = 0
+        req_matches = []
+        req_missing = []
+        
+        if required:
+            total_weight = sum(required.values())
+            
+            for skill, weight in required.items():
+                skill_lower = skill.lower()
+                best_ratio = 0
+                matched = False
+                
+                for profile_skill in skills_list:
+                    ratio = fuzz.ratio(skill_lower, profile_skill)
+                    partial_ratio = fuzz.partial_ratio(skill_lower, profile_skill)
+                    final_ratio = max(ratio, partial_ratio)
+                    
+                    if final_ratio >= 70:  # LOWERED threshold
+                        if final_ratio > best_ratio:
+                            best_ratio = final_ratio
+                            matched = True
+                
+                if matched:
+                    points = (weight / total_weight) * 50 * (best_ratio / 100)
+                    req_score += points
+                    req_matches.append(skill)
+                else:
+                    req_missing.append(skill)
+        
+        # Score preferred (20 points)
+        pref_score = 0
+        pref_matches = []
+        
+        if preferred:
+            total_weight = sum(preferred.values())
+            
+            for skill, weight in preferred.items():
+                skill_lower = skill.lower()
+                best_ratio = 0
+                matched = False
+                
+                for profile_skill in skills_list:
+                    ratio = fuzz.ratio(skill_lower, profile_skill)
+                    partial_ratio = fuzz.partial_ratio(skill_lower, profile_skill)
+                    final_ratio = max(ratio, partial_ratio)
+                    
+                    if final_ratio >= 70:
+                        if final_ratio > best_ratio:
+                            best_ratio = final_ratio
+                            matched = True
+                
+                if matched:
+                    points = (weight / total_weight) * 20 * (best_ratio / 100)
+                    pref_score += points
+                    pref_matches.append(skill)
+        
+        total = req_score + pref_score
+        
+        self.breakdown['skills'] = {
+            'score': round(total, 2),
+            'required_matched': len(req_matches),
+            'required_total': len(required),
+            'required_missing': req_missing,
+            'preferred_matched': len(pref_matches)
+        }
+        
+        return total
+    
+    def _score_experience(self, experiences):
+        """Score experience (20 points)"""
+        min_years = self.requirements.get('min_experience_years', 0)
+        
+        total_months = 0
+        for exp in experiences:
+            if not isinstance(exp, dict):
+                continue
+            duration = exp.get('duration', '')
+            if not duration:
+                continue
+            
+            years = 0
+            months = 0
+            year_match = re.search(r'(\d+)\s*yr', duration)
+            if year_match:
+                years = int(year_match.group(1))
+            month_match = re.search(r'(\d+)\s*mo', duration)
+            if month_match:
+                months = int(month_match.group(1))
+            
+            total_months += (years * 12) + months
+        
+        total_years = total_months / 12
+        
+        if total_years >= min_years:
+            score = 20
+        else:
+            score = (total_years / min_years) * 20 if min_years > 0 else 0
+        
+        self.breakdown['experience'] = {
+            'score': round(score, 2),
+            'years': round(total_years, 1)
+        }
+        
+        return score
+    
+    def _score_education(self, education):
+        """Score education (10 points)"""
+        required = self.requirements.get('education_level', [])
+        if not required:
+            self.breakdown['education'] = {'score': 10}
+            return 10
+        
+        if not education:
+            self.breakdown['education'] = {'score': 0}
+            return 0
+        
+        levels = {
+            'high school': 1, 'sma': 1, 'smk': 1,
+            'diploma': 2, 'associate': 2, 'd3': 2,
+            'bachelor': 3, 's1': 3, 'sarjana': 3,
+            'master': 4, 's2': 4, 'mba': 4,
+            'doctoral': 5, 'phd': 5, 's3': 5
+        }
+        
+        highest = 0
+        for edu in education:
+            if not isinstance(edu, dict):
+                continue
+            degree = edu.get('degree', '').lower()
+            if not degree:
+                continue
+            for level_name, level_val in levels.items():
+                if level_name in degree and level_val > highest:
+                    highest = level_val
+        
+        required_level = 0
+        for req in required:
+            for level_name, level_val in levels.items():
+                if level_name in req.lower() and level_val > required_level:
+                    required_level = level_val
+        
+        if highest >= required_level:
+            score = 10
+        elif highest > 0:
+            score = (highest / required_level) * 10 if required_level > 0 else 0
+        else:
+            score = 0
+        
+        self.breakdown['education'] = {'score': round(score, 2)}
+        return score
 
 
 def load_requirements(requirements_id):
@@ -55,11 +270,56 @@ def load_requirements(requirements_id):
         return None
 
 
+def get_profile_hash(profile_url):
+    """Generate unique hash from profile URL"""
+    return hashlib.md5(profile_url.encode()).hexdigest()[:8]
+
+
+def check_if_already_scored(profile_url, requirements_id, output_dir=OUTPUT_DIR):
+    """Check if profile has already been scored for this requirement"""
+    if not os.path.exists(output_dir):
+        return False, None
+    
+    url_hash = get_profile_hash(profile_url)
+    
+    # Search for existing files with this URL hash and requirements_id
+    pattern = os.path.join(output_dir, f"*_{requirements_id}_*_{url_hash}_score.json")
+    existing_files = glob.glob(pattern)
+    
+    if existing_files:
+        return True, existing_files[0]
+    
+    # Fallback: check by reading all score JSON files
+    all_files = glob.glob(os.path.join(output_dir, "*_score.json"))
+    for filepath in all_files:
+        try:
+            with open(filepath, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+                profile = data.get('profile', {})
+                req_id = data.get('requirements_id', '')
+                if profile.get('profile_url') == profile_url and req_id == requirements_id:
+                    return True, filepath
+        except:
+            continue
+    
+    return False, None
+
+
 def save_score_result(profile_data, score_result, requirements_id):
-    """Save scoring result to JSON file"""
+    """Save scoring result to JSON file (with duplicate prevention)"""
     os.makedirs(OUTPUT_DIR, exist_ok=True)
     
-    # Create filename
+    profile_url = profile_data.get('profile_url', '')
+    
+    # Check if already scored
+    if profile_url:
+        already_exists, existing_file = check_if_already_scored(profile_url, requirements_id)
+        if already_exists:
+            print(f"⚠ Score already exists: {existing_file}")
+            print(f"  Skipping save to avoid duplication")
+            return existing_file
+    
+    # Create filename with hash
     timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
     name = profile_data.get('name', 'unknown')
     
@@ -70,7 +330,9 @@ def save_score_result(profile_data, score_result, requirements_id):
     name_slug = name.replace(' ', '_').replace('/', '_').replace('\\', '_').lower()
     name_slug = ''.join(c for c in name_slug if c.isalnum() or c in ('_', '-'))
     
-    filename = f"{name_slug}_{requirements_id}_{timestamp}_score.json"
+    # Add URL hash to filename for uniqueness
+    url_hash = get_profile_hash(profile_url) if profile_url else 'nohash'
+    filename = f"{name_slug}_{requirements_id}_{timestamp}_{url_hash}_score.json"
     filepath = os.path.join(OUTPUT_DIR, filename)
     
     # Prepare output
@@ -120,6 +382,7 @@ def print_stats():
     print(f"Processing: {stats['processing']}")
     print(f"Completed: {stats['completed']}")
     print(f"Failed: {stats['failed']}")
+    print(f"Skipped (duplicates): {stats['skipped']}")
     print(f"Supabase Updated: {stats['supabase_updated']}")
     print(f"Supabase Failed: {stats['supabase_failed']}")
     if stats['completed'] + stats['failed'] > 0:
@@ -133,6 +396,7 @@ def process_message(message_data):
     try:
         profile_data = message_data.get('profile_data')
         requirements_id = message_data.get('requirements_id', 'default')
+        profile_url = profile_data.get('profile_url', '') if profile_data else ''
         
         if not profile_data:
             print("✗ No profile data in message")
@@ -141,6 +405,15 @@ def process_message(message_data):
         name = profile_data.get('name', 'Unknown')
         print(f"\n📥 Processing: {name}")
         print(f"   Requirements: {requirements_id}")
+        
+        # Check if already scored
+        if profile_url:
+            already_exists, existing_file = check_if_already_scored(profile_url, requirements_id)
+            if already_exists:
+                print(f"⊘ Already scored: {existing_file}")
+                with stats['lock']:
+                    stats['skipped'] += 1
+                return True  # Return True to ack message
         
         # Load requirements
         requirements = load_requirements(requirements_id)
@@ -151,25 +424,22 @@ def process_message(message_data):
         
         # Calculate score
         print(f"🔢 Calculating score...")
-        scorer = Scorer(requirements)
+        scorer = OptimizedScorer(requirements)
         score_result = scorer.score(profile_data)
         
         # Print result
         print(f"\n{'='*60}")
         print(f"SCORE RESULT: {name}")
         print(f"{'='*60}")
-        print(f"Total Score: {score_result['total_score']}/{score_result['max_score']}")
+        print(f"Total Score: {score_result['total_score']}/100")
         print(f"Percentage: {score_result['percentage']}%")
         
         breakdown = score_result.get('breakdown', {})
+        skills_breakdown = breakdown.get('skills', {})
         print(f"\nBreakdown:")
-        print(f"  - Skills: {breakdown.get('skills', {}).get('score', 0)}/40")
-        print(f"  - Text Similarity: {breakdown.get('text_similarity', {}).get('score', 0)}/30")
+        print(f"  - Skills: {skills_breakdown.get('score', 0)}/70 (Matched: {skills_breakdown.get('required_matched', 0)}/{skills_breakdown.get('required_total', 0)})")
         print(f"  - Experience: {breakdown.get('experience', {}).get('score', 0)}/20")
         print(f"  - Education: {breakdown.get('education', {}).get('score', 0)}/10")
-        print(f"  - Gender: {breakdown.get('gender', {}).get('score', 0)}/10")
-        print(f"  - Location: {breakdown.get('location', {}).get('score', 0)}/10")
-        print(f"  - Age: {breakdown.get('age', {}).get('score', 0)}/10")
         print(f"{'='*60}")
         
         # Save result
@@ -381,6 +651,7 @@ def main():
         print("="*60)
         print(f"✓ Completed: {stats['completed']}")
         print(f"✗ Failed: {stats['failed']}")
+        print(f"⊘ Skipped (duplicates): {stats['skipped']}")
         if stats['completed'] + stats['failed'] > 0:
             success_rate = stats['completed'] / (stats['completed'] + stats['failed']) * 100
             print(f"📊 Success Rate: {success_rate:.1f}%")
