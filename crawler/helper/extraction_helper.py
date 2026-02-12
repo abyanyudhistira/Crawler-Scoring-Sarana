@@ -8,7 +8,7 @@ def click_show_all(driver, section):
     """Click 'Show all' link in section"""
     try:
         smooth_scroll(driver, section)
-        human_delay(0.3, 0.5)
+        human_delay(0.5, 0.8)
         
         # Find "Show all X items" link
         selectors = [
@@ -28,7 +28,7 @@ def click_show_all(driver, section):
                 print("  ✓ Clicked 'Show all'")
                 
                 # Wait for page to load
-                human_delay(1, 1.5)
+                human_delay(2, 2.5)  # Increased for better page load
                 return True
             except NoSuchElementException:
                 continue
@@ -57,7 +57,7 @@ def click_back_arrow(driver):
                 print("  Found back button")
                 driver.execute_script("arguments[0].click();", back_button)
                 print("  ✓ Clicked back")
-                human_delay(0.8, 1.2)
+                human_delay(1.5, 2)  # Increased for page transition
                 return True
             except NoSuchElementException:
                 continue
@@ -65,7 +65,7 @@ def click_back_arrow(driver):
         # Fallback: browser back
         print("  Using browser back()")
         driver.back()
-        human_delay(0.8, 1.2)
+        human_delay(1.5, 2)
         return True
     except Exception as e:
         print(f"  Error clicking back: {e}")
@@ -78,18 +78,18 @@ def extract_items_from_detail_page(driver):
     
     # Wait for detail page to fully load
     print("  Waiting for detail page to load...")
-    human_delay(0.8, 1.2)
+    human_delay(2, 2.5)  # Increased even more
     
     # Aggressive scrolling to load ALL lazy content
     print("  Scrolling to load all items...")
     last_count = 0
     no_change_count = 0
-    max_scrolls = 12  # Reduced from 15
+    max_scrolls = 20  # Increased even more
     
     for i in range(max_scrolls):
         # Scroll down
         driver.execute_script("window.scrollBy(0, 1500);")
-        human_delay(0.4, 0.6)
+        human_delay(1, 1.5)  # Increased for better loading
         
         # Count current items
         current_items = driver.find_elements(By.XPATH, "//main//ul[contains(@class, 'pvs-list')]/li")
@@ -99,9 +99,9 @@ def extract_items_from_detail_page(driver):
         
         if current_count == last_count:
             no_change_count += 1
-            # If no change for 2 consecutive scrolls, we're done
-            if no_change_count >= 2:
-                print(f"    No new items after 2 scrolls, stopping")
+            # If no change for 4 consecutive scrolls, we're done
+            if no_change_count >= 4:
+                print(f"    No new items after 4 scrolls, stopping")
                 break
         else:
             no_change_count = 0
@@ -112,18 +112,20 @@ def extract_items_from_detail_page(driver):
         at_bottom = driver.execute_script(
             "return (window.innerHeight + window.scrollY) >= document.body.scrollHeight - 100;"
         )
-        if at_bottom and no_change_count >= 1:
+        if at_bottom and no_change_count >= 2:
             print(f"    Reached bottom of page")
             break
+    
+    print(f"  Final item count after scrolling: {last_count}")
     
     # Scroll back to top
     print("  Scrolling back to top...")
     driver.execute_script("window.scrollTo(0, 0);")
-    human_delay(0.4, 0.6)
+    human_delay(1, 1.5)
     
     # Scroll down a bit to middle
     driver.execute_script("window.scrollTo(0, document.body.scrollHeight / 2);")
-    human_delay(0.3, 0.5)
+    human_delay(0.8, 1)
     
     # Get items - try multiple selectors
     selectors = [

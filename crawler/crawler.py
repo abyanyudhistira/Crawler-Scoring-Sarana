@@ -33,13 +33,55 @@ class LinkedInCrawler:
             self.wait.until(
                 EC.presence_of_element_located((By.TAG_NAME, "main"))
             )
-            human_delay(1, 1.5)
+            human_delay(2, 2.5)  # Increased for better initial load
         except TimeoutException:
             print("⚠ Page load timeout! Content may not be available.")
-            human_delay(2, 3)  # Wait longer
+            human_delay(3, 4)  # Wait longer on timeout
         
-        # Scroll to load all sections
-        scroll_page_to_load(self.driver)
+        # Scroll to load all sections - AGGRESSIVE LOADING
+        print("\n" + "="*60)
+        print("LOADING ALL CONTENT - AGGRESSIVE SCROLLING")
+        print("="*60)
+        
+        # Get initial height
+        last_height = self.driver.execute_script("return document.body.scrollHeight")
+        
+        # Scroll down multiple times to trigger lazy loading
+        for scroll_round in range(3):  # 3 rounds of full page scroll
+            print(f"\nScroll round {scroll_round + 1}/3")
+            
+            # Scroll to bottom in chunks
+            current_position = 0
+            scroll_step = 800
+            
+            while current_position < last_height:
+                current_position += scroll_step
+                self.driver.execute_script(f"window.scrollTo(0, {current_position});")
+                human_delay(0.8, 1.2)  # Wait for content to load
+            
+            # Wait at bottom
+            self.driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
+            human_delay(1.5, 2)
+            
+            # Check if new content loaded
+            new_height = self.driver.execute_script("return document.body.scrollHeight")
+            print(f"  Height: {last_height} → {new_height}")
+            
+            if new_height > last_height:
+                last_height = new_height
+                print(f"  ✓ New content loaded, continuing...")
+            else:
+                print(f"  ✓ No new content, page fully loaded")
+                break
+        
+        # Scroll back to top
+        print("\nScrolling back to top...")
+        self.driver.execute_script("window.scrollTo(0, 0);")
+        human_delay(1, 1.5)
+        
+        print("="*60)
+        print("CONTENT FULLY LOADED - STARTING EXTRACTION")
+        print("="*60)
         
         # Debug: print page info
         print(f"DEBUG - Current URL: {self.driver.current_url}")
@@ -58,8 +100,8 @@ class LinkedInCrawler:
         data['name'] = self.extract_name()
         print(f"→ {data['name']}")
         
-        print("\n[2/15] Extracting gender (pronouns)...")
-        data['gender'] = self.extract_gender()
+        print("\n[2/15] Extracting gender (from name)...")
+        data['gender'] = self.extract_gender_from_name(data['name'])
         print(f"→ {data['gender']}")
         
         print("\n[3/15] Extracting location...")
@@ -204,6 +246,13 @@ class LinkedInCrawler:
         except Exception as e:
             print(f"  Error in pronoun extraction: {e}")
             return "N/A"
+    
+    def extract_gender_from_name(self, full_name):
+        """Extract gender from name using gender-guesser library"""
+        if not full_name or full_name == 'N/A':
+            return "Unknown"
+        
+        return self._predict_gender_from_name(full_name)
     
     def _predict_gender_from_name(self, full_name):
         """Predict gender from name using gender-guesser library"""
@@ -454,14 +503,6 @@ class LinkedInCrawler:
                 items = extract_items_from_detail_page(self.driver)
                 print(f"Processing {len(items)} items...")
                 
-                # Debug: print raw item count
-                if len(items) < 9:
-                    print(f"  ⚠ WARNING: Expected 9 experiences but found {len(items)} items")
-                    print(f"  This might mean:")
-                    print(f"    - Page didn't scroll enough to load all items")
-                    print(f"    - Items selector is not matching all elements")
-                    print(f"    - Some items are nested/grouped differently")
-                
                 for idx, item in enumerate(items):
                     try:
                         text = item.text.strip()
@@ -470,17 +511,20 @@ class LinkedInCrawler:
                         
                         print(f"\n  === Item {idx + 1}/{len(items)} ===")
                         print(f"  Raw text length: {len(text)} chars")
-                        print(f"  First 150 chars: {text[:150]}...")
+                        print(f"  First 200 chars: {text[:200]}...")
                         
                         # Skip nested items (Skills:, etc)
                         if text.startswith('Skills:') or text.startswith('Skill'):
                             print(f"  → SKIP: Nested skills item")
                             continue
                         
-                        # Must have company indicator
-                        if ' · ' not in text:
-                            print(f"  → SKIP: No company indicator (·)")
+                        # Skip if it's just a certificate/training line
+                        if text.startswith('Certificate') or text.startswith('Training'):
+                            print(f"  → SKIP: Certificate/Training item")
                             continue
+                        
+                        # Must have company indicator OR be a valid experience format
+                        # Some experiences don't have · in first line if it's just title
                         
                         # Split by newlines and remove duplicates (LinkedIn has duplicate lines)
                         all_lines = [l.strip() for l in text.split('\n') if l.strip()]
@@ -494,8 +538,8 @@ class LinkedInCrawler:
                                 prev = line
                         
                         print(f"  Total unique lines: {len(lines)}")
-                        for i, line in enumerate(lines[:10]):  # Show first 10
-                            print(f"    [{i}] {line[:80]}")
+                        for i, line in enumerate(lines[:12]):  # Show first 12
+                            print(f"    [{i}] {line[:100]}")
                         
                         # LinkedIn structure after deduplication:
                         # 0: Title
@@ -503,20 +547,35 @@ class LinkedInCrawler:
                         # 2: Date range (e.g., "Aug 2024 - Present · 6 mos")
                         # 3: Date range again (e.g., "Aug 2024 to Present · 6 mos") 
                         # 4: Location (if exists)
-                        # 5+: Description/Skills (skip these)
+                        # 5+: Description/Skills/Certificate (skip these)
                         
                         if len(lines) >= 3:
+                            # Check if line 1 looks like a company (has · or is just company name)
+                            # Check if line 2 looks like duration (has date or "Present")
+                            line1_is_company = True  # Assume line 1 is company
+                            line2_is_duration = (
+                                '-' in lines[2] or 
+                                'Present' in lines[2] or 
+                                'to' in lines[2].lower() or
+                                any(month in lines[2] for month in ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'])
+                            )
+                            
+                            if not line2_is_duration:
+                                print(f"  → SKIP: Line 2 doesn't look like duration: {lines[2][:50]}")
+                                continue
+                            
                             # Find location: it's after the duplicate date line
                             location = ""
                             if len(lines) > 4:
                                 potential_location = lines[4]
-                                # Location is short and doesn't look like description
+                                # Location is short and doesn't look like description or certificate
                                 is_location = (
-                                    len(potential_location) < 80 and
+                                    len(potential_location) < 100 and
                                     ' to ' not in potential_location and
-                                    '·' not in potential_location and
                                     'http' not in potential_location.lower() and
                                     'www.' not in potential_location.lower() and
+                                    not potential_location.startswith('Certificate') and
+                                    not potential_location.startswith('Training') and
                                     not (len(potential_location) > 50 and ' is ' in potential_location)
                                 )
                                 
@@ -531,12 +590,14 @@ class LinkedInCrawler:
                             }
                             
                             experiences.append(exp_data)
-                            print(f"  ✓ ADDED {len(experiences)}. {exp_data['title']} at {exp_data['company'][:30]}")
+                            print(f"  ✓ ADDED {len(experiences)}. {exp_data['title']} at {exp_data['company'][:50]}")
                         else:
                             print(f"  → SKIP: Not enough lines ({len(lines)})")
                     
                     except Exception as e:
                         print(f"  Error parsing item {idx}: {e}")
+                        import traceback
+                        traceback.print_exc()
                         continue
                 
                 # Click back
